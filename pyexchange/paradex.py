@@ -27,6 +27,7 @@ import pytz
 import requests
 
 import pymaker.zrx
+from pyexchange.model import Book, BookItem
 from pyexchange.util import sort_trades
 from pymaker import Wad
 from pymaker.sign import eth_sign
@@ -156,6 +157,12 @@ class ParadexApi:
 
     def get_balances(self):
         return self._http_post("/v0/balances", {})
+
+    def get_book(self, pair: str) -> Book:
+        result = self._http_get("/v0/orderbook", f"market={pair}")
+
+        return Book(bids=map(lambda item: BookItem(price=Wad.from_number(item['price']), amount=Wad.from_number(item['amount'])), result['bids']),
+                    asks=map(lambda item: BookItem(price=Wad.from_number(item['price']), amount=Wad.from_number(item['amount'])), result['asks']))
 
     def get_orders(self, pair: str) -> List[Order]:
         assert(isinstance(pair, str))

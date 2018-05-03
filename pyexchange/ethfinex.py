@@ -26,6 +26,7 @@ from typing import List
 import requests
 import time
 
+from pyexchange.model import Book, BookItem
 from pymaker.numeric import Wad
 from pymaker.util import http_response_summary
 
@@ -130,6 +131,16 @@ class EthfinexApi:
 
     def get_balances(self):
         return self._http_post("/v1/balances", {})
+
+    def get_book(self, pair: str) -> Book:
+        assert(isinstance(pair, str))
+
+        result = self._http_get(f"/v2/book/t{pair}/P0", f"len=100")
+        result_bids = filter(lambda item: item[2] > 0, result)
+        result_asks = filter(lambda item: item[2] < 0, result)
+
+        return Book(bids=map(lambda item: BookItem(price=Wad.from_number(item[0]), amount=abs(Wad.from_number(item[2]))), result_bids),
+                    asks=map(lambda item: BookItem(price=Wad.from_number(item[0]), amount=abs(Wad.from_number(item[2]))), result_asks))
 
     def get_orders(self, pair: str) -> List[Order]:
         assert(isinstance(pair, str))

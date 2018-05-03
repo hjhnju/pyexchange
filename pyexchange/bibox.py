@@ -250,6 +250,15 @@ class BiboxApi:
         assert(isinstance(retry, bool))
         return self._request('/v1/transfer', {"cmd": "transfer/assets", "body": {}}, retry)
 
+    def get_book(self, pair: str, retry: bool = False) -> List[Order]:
+        assert(isinstance(pair, str))
+        assert(isinstance(retry, bool))
+
+        result = self._request('/v1/mdata', {"cmd": "api/depth", "body": {"pair": pair,
+                                                                          "size": 200}}, retry)
+
+        return result
+
     def get_orders(self, pair: str, retry: bool = False) -> List[Order]:
         assert(isinstance(pair, str))
         assert(isinstance(retry, bool))

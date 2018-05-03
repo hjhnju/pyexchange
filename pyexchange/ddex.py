@@ -23,6 +23,7 @@ from typing import Optional, List
 import dateutil.parser
 import requests
 
+from pyexchange.model import Book, BookItem
 from pyexchange.util import sort_trades
 from pymaker import Wad
 from pymaker.sign import eth_sign
@@ -148,6 +149,14 @@ class DdexApi:
 
     def get_balances(self):
         return self._http_get_signed("/v2/account/lockedBalances", {})
+
+    def get_book(self, pair: str) -> Book:
+        assert(isinstance(pair, str))
+
+        result = self._http_get(f"/v2/markets/{pair}/orderbook?level=2", {})
+
+        return Book(bids=map(lambda item: BookItem(price=Wad.from_number(item['price']), amount=Wad.from_number(item['amount'])), result['data']['orderBook']['bids']),
+                    asks=map(lambda item: BookItem(price=Wad.from_number(item['price']), amount=Wad.from_number(item['amount'])), result['data']['orderBook']['asks']))
 
     def get_orders(self, pair: str) -> List[Order]:
         assert(isinstance(pair, str))
