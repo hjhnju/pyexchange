@@ -161,9 +161,10 @@ class OKEXApi:
         return self._http_get("/api/spot/v3/accounts")
 
     def get_orders(self, pair: str) -> List[Order]:
+        """获取active订单"""
         assert(isinstance(pair, str))
 
-        result = self._http_get("/api/spot/v3/orders", f'instrument_id={pair}')
+        result = self._http_get("/api/spot/v3/orders_pending", f'instrument_id={pair}')
 
         orders = filter(self._filter_order, result)
         return list(map(self._parse_order, orders))
@@ -260,9 +261,6 @@ class OKEXApi:
             if 'error_code' in data:
                 raise Exception(f"OKCoin API negative response: {http_response_summary(result)}")
 
-            if 'result' not in data or data['result'] is not True:
-                raise Exception(f"OKCoin API negative response: {http_response_summary(result)}")
-
         return data
 
     def _get_timestamp(self):
@@ -270,9 +268,14 @@ class OKEXApi:
         t = now.isoformat()
         return t + "Z"
 
+    def _get_server_timestamp(self):
+        data = self._result(requests.get(f'{self.api_server}/api/general/v3/time'), False)
+        return data['iso']
+
     def _okex_header(self, method, request_path, body=""):
 
-        timestamp = self._get_timestamp()
+        # timestamp = self._get_timestamp()
+        timestamp = self._get_server_timestamp()
         """
         OK-ACCESS-SIGN的请求头是对timestamp + method + requestPath + body字符串(+表示字符串连接)，以及secretKey，使用HMAC SHA256方法加密，通过BASE64编码输出而得到的。
         """
@@ -281,12 +284,14 @@ class OKEXApi:
         d = mac.digest()
         sign = base64.b64encode(d)
 
+        logging.debug(f'message {message}')
+
         header = dict()
         header['Content-Type'] = "application/json"
-        header['OK_ACCESS_KEY'] = self.api_key
-        header['OK_ACCESS_SIGN'] = sign
-        header['OK_ACCESS_TIMESTAMP'] = str(timestamp)
-        header['OK_ACCESS_PASSPHRASE'] = self.passphrase
+        header['OK-ACCESS-KEY'] = self.api_key
+        header['OK-ACCESS-SIGN'] = sign
+        header['OK-ACCESS-TIMESTAMP'] = str(timestamp)
+        header['OK-ACCESS-PASSPHRASE'] = self.passphrase
         return header
 
     def _http_get(self, resource: str, params: str = '', check_result: bool = True):
@@ -294,12 +299,15 @@ class OKEXApi:
         assert(isinstance(params, str))
         assert(isinstance(check_result, bool))
 
-        url = f"{self.api_server}{resource}",
         if params != '':
-            url = f"{url}?{params}"
+            resource = f"{resource}?{params}"
+
+        url = f"{self.api_server}{resource}"
+
+        okex_header = self._okex_header('GET', resource)
 
         return self._result(requests.get(url=url,
-                                         headers=self._okex_header('GET', resource),
+                                         headers=okex_header,
                                          timeout=self.timeout), check_result)
 
     def _http_post(self, resource: str, params: dict):
