@@ -140,8 +140,6 @@ class OKEXApi:
         self.passphrase = passphrase
         self.timeout = timeout
 
-
-
     def ticker(self, pair: str):
         assert(isinstance(pair, str))
         return self._http_get(f"/api/spot/v3/instruments/{pair}ticker")
