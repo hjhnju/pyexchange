@@ -17,11 +17,13 @@
 
 import logging
 import urllib
-import hashlib
 from pprint import pformat
 from typing import List
 
 import requests
+import hmac
+import base64
+import datetime
 
 from pyexchange.model import Candle
 from pymaker.numeric import Wad
@@ -120,93 +122,53 @@ class Trade:
 
 
 class OKEXApi:
-    """OKCoin and OKEX API interface.
-
-    Developed according to the following manual:
-    <https://www.okex.com/intro_apiOverview.html>.
-
-    Inspired by the following example:
-    <https://github.com/OKCoin/rest>, <https://github.com/OKCoin/rest/tree/master/python>.
+    """OKEX API V3
     """
 
     logger = logging.getLogger()
 
-    def __init__(self, api_server: str, api_key: str, secret_key: str, timeout: float):
+    def __init__(self, api_server: str, api_key: str, secret_key: str, passphrase: str, timeout: float):
         assert(isinstance(api_server, str))
         assert(isinstance(api_key, str))
         assert(isinstance(secret_key, str))
+        assert(isinstance(passphrase, str))
         assert(isinstance(timeout, float))
 
         self.api_server = api_server
         self.api_key = api_key
         self.secret_key = secret_key
+        self.passphrase = passphrase
         self.timeout = timeout
+
+
 
     def ticker(self, pair: str):
         assert(isinstance(pair, str))
-        return self._http_get("/api/v1/ticker.do", f"symbol={pair}")
+        return self._http_get(f"/api/spot/v3/instruments/{pair}ticker")
 
     def depth(self, pair: str):
         assert(isinstance(pair, str))
-        return self._http_get("/api/v1/depth.do", f"symbol={pair}")
+        return self._http_get(f"/api/spot/v3/instruments/{pair}/book")
 
-    def candles(self, pair: str, type: str, size: int) -> List[Candle]:
-        assert(isinstance(pair, str))
-        assert(isinstance(type, str))
-        assert(isinstance(size, int))
-
-        assert(type in ("1min", "3min", "5min", "15min", "30min", "1day", "3day", "1week",
-                        "1hour", "2hour", "4hour","6hour", "12hour"))
-
-        result = self._http_get("/api/v1/kline.do", f"symbol={pair}&type={type}&size={size}", False)
-
-        return list(map(lambda item: Candle(timestamp=int(item[0]/1000),
-                                            open=Wad.from_number(item[1]),
-                                            close=Wad.from_number(item[4]),
-                                            high=Wad.from_number(item[2]),
-                                            low=Wad.from_number(item[3]),
-                                            volume=Wad.from_number(item[5])), result))
-
-    def get_balances(self) -> dict:
-        return self._http_post("/api/v1/userinfo.do", {})["info"]["funds"]
+    def get_balances(self) -> list:
+        """
+        [{"currency": “BTC”,
+        “balance”: ”2.3”,
+        “hold”: “2”,
+        "available": “0.3”,
+        “id”:”344555”
+        }]
+        :return:
+        """
+        return self._http_get("/api/spot/v3/accounts")
 
     def get_orders(self, pair: str) -> List[Order]:
         assert(isinstance(pair, str))
 
-        result = self._http_post("/api/v1/order_info.do", {
-            'symbol': pair,
-            'order_id': '-1'
-        })
+        result = self._http_get("/api/spot/v3/orders", f'instrument_id={pair}')
 
-        orders = filter(self._filter_order, result['orders'])
+        orders = filter(self._filter_order, result)
         return list(map(self._parse_order, orders))
-
-    def get_orders_history(self, pair: str, number_of_orders: int) -> List[Order]:
-        assert(isinstance(pair, str))
-        assert(isinstance(number_of_orders, int))
-
-        orders = []
-        page_length = 200
-        for page in range(1, 100):
-            result = self._http_post("/api/v1/order_history.do", {
-                'symbol': pair,
-                'status': 100,
-                'current_page': page,
-                'page_length': page_length
-            })['orders']
-
-            orders = orders + list(filter(self._filter_order, result))
-
-            if len(result) == 0:
-                break
-
-            if len(result) < page_length:
-                break
-
-            if len(orders) >= number_of_orders:
-                break
-
-        return list(map(self._parse_order, orders[:number_of_orders]))
 
     def place_order(self, pair: str, is_sell: bool, price: Wad, amount: Wad) -> int:
         assert(isinstance(pair, str))
@@ -217,16 +179,18 @@ class OKEXApi:
         self.logger.info(f"Placing order ({'SELL' if is_sell else 'BUY'}, amount {amount} of {pair},"
                          f" price {price})...")
 
-        result = self._http_post("/api/v1/trade.do", {
-            'symbol': pair,
-            'type': 'sell' if is_sell else 'buy',
-            'price': float(price),
-            'amount': float(amount)
+        result = self._http_post("/api/spot/v3/orders", {
+            'instrument_id': pair,
+            'side': 'sell' if is_sell else 'buy',
+            'type': 'limit',
+            'price': str(price),
+            'size': str(amount)
         })
         order_id = int(result['order_id'])
+        bol_result = int(result['result'])
 
         self.logger.info(f"Placed order ({'SELL' if is_sell else 'BUY'}, amount {amount} of {pair},"
-                         f" price {price}) as #{order_id}")
+                         f" price {price}) as #{order_id}, result {bol_result}")
 
         return order_id
 
@@ -236,9 +200,8 @@ class OKEXApi:
 
         self.logger.info(f"Cancelling order #{order_id}...")
 
-        result = self._http_post("/api/v1/cancel_order.do", {
-            'symbol': pair,
-            'order_id': order_id
+        result = self._http_post(f"/api/spot/v3/cancel_orders/{order_id}", {
+            'instrument_id': pair
         })
         success = int(result['order_id']) == order_id
 
@@ -257,15 +220,7 @@ class OKEXApi:
     def get_all_trades(self, pair: str, page_number: int = 1) -> List[Trade]:
         assert(isinstance(pair, str))
         assert(isinstance(page_number, int))
-        assert(page_number == 1)
-
-        result = self._http_get("/api/v1/trades.do", f"symbol={pair}", False)
-        return list(map(lambda item: Trade(trade_id=item['tid'],
-                                           timestamp=item['date'],
-                                           is_sell=item['type'] == 'sell',
-                                           price=Wad.from_number(item['price']),
-                                           amount=Wad.from_number(item['amount']),
-                                           amount_symbol=pair.split('_')[0].lower()), result))
+        raise Exception("get_trades() not available for OKEX")
 
     @staticmethod
     def _filter_order(item: dict) -> bool:
@@ -283,14 +238,13 @@ class OKEXApi:
                      amount=Wad.from_number(item['amount']),
                      deal_amount=Wad.from_number(item['deal_amount']))
 
-    def _create_signature(self, params: dict):
-        assert(isinstance(params, dict))
-
-        sign = ''
-        for key in sorted(params.keys()):
-            sign += key + '=' + str(params[key]) + '&'
-        data = sign + 'secret_key=' + self.secret_key
-        return hashlib.md5(data.encode("utf8")).hexdigest().upper()
+    def _create_signature(self, timestamp, method, request_path, body, secret_key):
+        if str(body) == '{}' or str(body) == 'None':
+            body = ''
+        message = str(timestamp) + str.upper(method) + request_path + str(body)
+        mac = hmac.new(bytes(secret_key, encoding='utf8'), bytes(message, encoding='utf-8'), digestmod='sha256')
+        d = mac.digest()
+        return base64.b64encode(d)
 
     @staticmethod
     def _result(result, check_result: bool) -> dict:
@@ -313,22 +267,48 @@ class OKEXApi:
 
         return data
 
-    def _http_get(self, resource: str, params: str, check_result: bool = True):
+    def _get_timestamp(self):
+        now = datetime.datetime.now()
+        t = now.isoformat()
+        return t + "Z"
+
+    def _okex_header(self, method, request_path, body=""):
+
+        timestamp = self._get_timestamp()
+        """
+        OK-ACCESS-SIGN的请求头是对timestamp + method + requestPath + body字符串(+表示字符串连接)，以及secretKey，使用HMAC SHA256方法加密，通过BASE64编码输出而得到的。
+        """
+        message = str(timestamp) + str.upper(method) + request_path + body
+        mac = hmac.new(bytes(self.secret_key, encoding='utf8'), bytes(message, encoding='utf-8'), digestmod='sha256')
+        d = mac.digest()
+        sign = base64.b64encode(d)
+
+        header = dict()
+        header['Content-Type'] = "application/json"
+        header['OK_ACCESS_KEY'] = self.api_key
+        header['OK_ACCESS_SIGN'] = sign
+        header['OK_ACCESS_TIMESTAMP'] = str(timestamp)
+        header['OK_ACCESS_PASSPHRASE'] = self.passphrase
+        return header
+
+    def _http_get(self, resource: str, params: str = '', check_result: bool = True):
         assert(isinstance(resource, str))
         assert(isinstance(params, str))
         assert(isinstance(check_result, bool))
 
-        return self._result(requests.get(url=f"{self.api_server}{resource}?{params}",
+        url = f"{self.api_server}{resource}",
+        if params != '':
+            url = f"{url}?{params}"
+
+        return self._result(requests.get(url=url,
+                                         headers=self._okex_header('GET', resource),
                                          timeout=self.timeout), check_result)
 
     def _http_post(self, resource: str, params: dict):
         assert(isinstance(resource, str))
         assert(isinstance(params, dict))
 
-        params['api_key'] = self.api_key
-        params['sign'] = self._create_signature(params)
-
         return self._result(requests.post(url=f"{self.api_server}{resource}",
                                           data=urllib.parse.urlencode(params),
-                                          headers={"Content-Type": "application/x-www-form-urlencoded"},
+                                          headers=self._okex_header('POST', resource, str(params)),
                                           timeout=self.timeout), True)
