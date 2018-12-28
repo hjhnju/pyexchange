@@ -31,10 +31,10 @@ from pymaker.util import http_response_summary
 
 
 class Order:
-    def __init__(self, order_id: int, timestamp: int, pair: str,
+    def __init__(self, order_id: int, timestamp: float, pair: str,
                  is_sell: bool, price: Wad, amount: Wad, deal_amount: Wad):
         assert(isinstance(order_id, int))
-        assert(isinstance(timestamp, int))
+        assert(isinstance(timestamp, float))
         assert(isinstance(pair, str))
         assert(isinstance(is_sell, bool))
         assert(isinstance(price, Wad))
@@ -81,13 +81,13 @@ class Order:
 class Trade:
     def __init__(self,
                  trade_id: id,
-                 timestamp: int,
+                 timestamp: float,
                  is_sell: bool,
                  price: Wad,
                  amount: Wad,
                  amount_symbol: str):
         assert(isinstance(trade_id, int))
-        assert(isinstance(timestamp, int))
+        assert(isinstance(timestamp, float))
         assert(isinstance(is_sell, bool))
         assert(isinstance(price, Wad))
         assert(isinstance(amount, Wad))
@@ -224,18 +224,21 @@ class OKEXApi:
     @staticmethod
     def _filter_order(item: dict) -> bool:
         assert(isinstance(item, dict))
-        return item['type'] in ['buy', 'sell']
+        return item['side'] in ['buy', 'sell']
 
     @staticmethod
     def _parse_order(item: dict) -> Order:
         assert(isinstance(item, dict))
-        return Order(order_id=item['order_id'],
-                     timestamp=int(item['create_date']/1000),
-                     pair=item['symbol'],
-                     is_sell=item['type'] == 'sell',
+
+        utc_dt = datetime.datetime.strptime(item['timestamp'], '%Y-%m-%dT%H:%M:%S.%fZ')
+        timestamp = (utc_dt - datetime.datetime(1970, 1, 1)).total_seconds()
+        return Order(order_id=int(item['order_id']),
+                     timestamp=timestamp,
+                     pair=str(item['instrument_id']),
+                     is_sell=item['side'] == 'sell',
                      price=Wad.from_number(item['price']),
-                     amount=Wad.from_number(item['amount']),
-                     deal_amount=Wad.from_number(item['deal_amount']))
+                     amount=Wad.from_number(item['size']),
+                     deal_amount=Wad.from_number(item['filled_size']))
 
     def _create_signature(self, timestamp, method, request_path, body, secret_key):
         if str(body) == '{}' or str(body) == 'None':
@@ -299,9 +302,7 @@ class OKEXApi:
 
         if params != '':
             resource = f"{resource}?{params}"
-
         url = f"{self.api_server}{resource}"
-
         okex_header = self._okex_header('GET', resource)
 
         return self._result(requests.get(url=url,
@@ -312,7 +313,11 @@ class OKEXApi:
         assert(isinstance(resource, str))
         assert(isinstance(params, dict))
 
-        return self._result(requests.post(url=f"{self.api_server}{resource}",
-                                          data=urllib.parse.urlencode(params),
-                                          headers=self._okex_header('POST', resource, str(params)),
+        url = f"{self.api_server}{resource}"
+        body = str(params)
+        okex_header = self._okex_header('POST', resource, body)
+
+        return self._result(requests.post(url=url,
+                                          data=body,
+                                          headers=okex_header,
                                           timeout=self.timeout), True)
