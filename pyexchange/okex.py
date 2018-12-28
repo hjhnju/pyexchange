@@ -284,8 +284,6 @@ class OKEXApi:
         d = mac.digest()
         sign = base64.b64encode(d)
 
-        logging.debug(f'message {message}')
-
         header = dict()
         header['Content-Type'] = "application/json"
         header['OK-ACCESS-KEY'] = self.api_key
