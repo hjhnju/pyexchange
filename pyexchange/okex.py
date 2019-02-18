@@ -267,7 +267,7 @@ class OKEXApi:
         return data
 
     def _get_timestamp(self):
-        now = datetime.datetime.now()
+        now = datetime.datetime.utcnow()
         t = now.isoformat()
         return t + "Z"
 
